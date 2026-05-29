@@ -1,104 +1,108 @@
 # 🍔 Bob's Baseline
 
-**AKA "Bob's Burgers ML Project"**
+Unsupervised anomaly detection engine that flags unusual behavioral patterns — built on a fake Bob's Burgers dataset, designed to map directly to production problems like API abuse, cost spikes, and resource exhaustion.
 
-Learning what "normal orders" look like — and flagging the ones that make Bob sigh.
+## When "Normal" Is Hard to Define
 
-## What this is
+Rule-based alerting breaks down when normal isn't constant. A single large order is fine on a Friday night and suspicious at 3 AM. A burst of rapid requests is expected from a batch job and alarming from a new user. Static thresholds generate noise; they don't catch what actually feels wrong.
 
-This project explores **order / request anomaly detection** using unsupervised machine learning.
+The same problem appears everywhere: detecting anomalous API calls, flagging cloud cost outliers, catching fraudulent transactions, identifying queue jobs that will blow up your infrastructure. You know it when you see it — but defining it upfront is hard.
 
-The idea is simple: instead of labeling things as *good* or *bad*, the system learns what **normal operational behavior** looks like and highlights orders that are unusually large, fast, expensive, or disruptive.
+## Density-Based Pattern Learning, No Labels Required
 
-Inspired by *Bob's Burgers*, built with blue-team instincts.
+This project trains a DBSCAN model on order history to learn what "normal" looks like across six behavioral features. Anything that doesn't fit a dense cluster gets labeled an anomaly. No labeled training data, no manually tuned thresholds — the model finds the structure in the data.
 
-## The Bob's Burgers mental model
+Once trained, new orders are scored in O(log n) using a NearestNeighbors index over DBSCAN core samples, so the model never needs to re-fit on every request. Each flagged order comes with a per-feature deviation report that explains *why* it was anomalous — not just that it was.
 
-At Bob's Burgers, most orders are predictable:
+The Bob's Burgers framing is intentional. The feature mapping is direct:
 
-* Teddy orders the same thing every day
-* Lunch rush looks like lunch rush
-* Prep times stay within reason
+| Order Feature | Production Equivalent |
+|---|---|
+| `items_per_order` | request payload size / batch size |
+| `time_since_last_order` | request interval / rate |
+| `total_cost` | compute or cloud spend |
+| `prep_time_estimate` | estimated processing duration |
+| `order_time` | time-of-day usage pattern |
+| `customer_frequency` | historical user activity |
 
-Then something happens:
+## Example
 
-* A massive order right before closing
-* A customer ordering way faster than usual
-* An order that explodes prep time and cost
+A new order arrives: 35 items, $380 total, placed at 10:30 PM, only 15 minutes after the last order.
 
-Bob doesn't ask:
+```
+📥 New Order Received:
+   Items: 35
+   Cost: $380
+   Time: 22.5 (10:30 PM)
+   Last order: 15 min ago
 
-"Is this malicious?"
+🎯 Model Prediction: Absolutely Not 🚨
 
-Bob asks:
+🚨 ALERT: Anomalous Order Detected!
+   Recommended Action: Flag for review
 
-"Is this order gonna be a problem?"
+📊 Why this classification?
+   🔴 EXTREME items_per_order: 35.00 (normal: 3.12, diff: +1022.4%)
+   🔴 EXTREME total_cost: 380.00 (normal: 28.47, diff: +1234.7%)
+   🟢 NORMAL order_time: 22.50 (normal: 14.31, diff: +57.2%)
+```
 
-That's the exact question this project answers.
+In a real system, this triggers rate limiting, an on-call alert, and a log entry for investigation.
 
-## Why this exists
+## Usage
 
-In real systems, many incidents start as *operational anomalies*:
+**Requirements:** Python 3.11+
 
-* Sudden cost spikes
-* Abusive API usage
-* Runaway jobs
-* Resource exhaustion
+```bash
+pip install -e .
+```
 
-Rule-based alerts are brittle. This project focuses on **pattern-based detection** instead.
+**Run the full pipeline** — generates synthetic orders, trains the model, analyzes anomalies, saves a visualization, and demos production scoring:
 
-## What the model looks at
+```bash
+python -m src.bobs_burgers_anomaly
+```
 
-Example features (restaurant-flavored, but transferable):
+**Test custom orders** against a trained model:
 
-* items\_per\_order
-* time\_since\_last\_order
-* order\_hour
-* customer\_order\_frequency
-* estimated\_prep\_time
-* total\_order\_cost
+```bash
+python scripts/test_orders.py
+```
 
-No identities required. No payload inspection. Just behavior.
+**Use your own data** via `CsvDataSource`:
 
-## How it works
+```python
+from src.data_source import CsvDataSource
+from src.model import OrderAnomalyModel
 
-1. Ingest order or request events
-2. Learn baseline behavior
-3. Score new events by how unusual they are
-4. Surface the ones likely to cause trouble
+data_source = CsvDataSource("path/to/orders.csv")
+df = data_source.load_orders()
 
-Models explored:
+model = OrderAnomalyModel()
+df = model.fit(df)
 
-* DBSCAN
+result = model.score({
+    "items_per_order": 35,
+    "time_since_last_order": 15,
+    "order_time": 22.5,
+    "customer_frequency": 0.05,
+    "total_cost": 380,
+    "prep_time_estimate": 175,
+})
 
+print(result["is_anomaly"])    # True
+print(result["cluster_name"])  # "Absolutely Not 🚨"
+```
 
-## How this maps to real systems
+**Tune the model** via DBSCAN parameters:
 
-Swap "orders" for:
+```python
+model = OrderAnomalyModel(eps=0.8, min_samples=10)
+```
 
-* API requests
-* Background jobs
-* Cloud workloads
-* Billing events
+- `eps` — neighborhood radius; smaller catches subtler outliers, larger reduces noise
+- `min_samples` — minimum points to form a core cluster; higher requires denser normal patterns
 
-Same logic. Same detection strategy.
-
-## Example question this answers
-
-"Would this request make the on-call engineer sigh?"
-
-If yes, it probably deserves a closer look.
-
-## What this is *not*
-
-* ❌ A fraud engine
-* ❌ A production billing system
-* ❌ A deep learning project
-
-This is a **learning-focused anomaly detection lab**.
-
-## Disclaimer
-
-All data is synthetic or anonymized. No real customers, no real transactions.
+Output artifacts are written to `outputs/anomaly_analysis.png` (six-panel visualization: scatter plots, PCA projection, cost distribution, anomaly intensity heatmap) and `data/bobs_burgers_orders.csv`.
 
 <br>
