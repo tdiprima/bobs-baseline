@@ -1,31 +1,35 @@
 """
-Test your own orders through Bob's trained detector
+Test your own orders through Bob's trained detector.
+
+Run from the project root:
+    python scripts/test_orders.py
 """
 
 import sys
 from pathlib import Path
 
-# Add parent directory to path so we can import from src
+# Add project root to path so src.* imports work
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import numpy as np
+from src.analysis import explain_deviations
+from src.data_source import SyntheticDataSource
+from src.features import FEATURE_COLS
+from src.model import OrderAnomalyModel
 
-from src.bobs_burgers_anomaly import BobsBurgersAnomalyDetector
 
-
-def test_custom_order():
-    """
-    Interactive tool to test custom orders
-    """
+def test_custom_order() -> None:
+    """Interactive tool to test custom orders."""
     print("=" * 70)
     print("🍔 BOB'S BURGERS: CUSTOM ORDER TESTER")
     print("=" * 70)
 
     # Load trained model
     print("\n📦 Loading trained model...")
-    detector = BobsBurgersAnomalyDetector()
-    df = detector.generate_synthetic_data(n_samples=1000)
-    df = detector.train(df)
+    data_source = SyntheticDataSource(n_samples=1000)
+    df = data_source.load_orders()
+
+    model = OrderAnomalyModel()
+    df = model.fit(df)
 
     print("\n✅ Model loaded successfully!")
     print("\nNow let's test some interesting orders...\n")
@@ -46,15 +50,7 @@ def test_custom_order():
         },
     ]
 
-    # Score each test case
-    feature_cols = [
-        "items_per_order",
-        "time_since_last_order",
-        "order_time",
-        "customer_frequency",
-        "total_cost",
-        "prep_time_estimate",
-    ]
+    normal_stats = df[df["cluster"] != -1][FEATURE_COLS].mean()
 
     for i, test in enumerate(test_cases, 1):
         print(f"\n{'='*70}")
@@ -72,23 +68,11 @@ def test_custom_order():
         print(f"   Total cost: ${order['total_cost']:.2f}")
         print(f"   Prep time: {order['prep_time_estimate']} minutes")
 
-        # Prepare features
-        X_new = np.array([list(order.values())])
-        X_new_scaled = detector.scaler.transform(X_new)
-
-        # Predict
-        all_features = detector.scaler.transform(df[feature_cols].values)
-        X_combined = np.vstack([all_features, X_new_scaled])
-        clusters = detector.model.fit_predict(X_combined)
-        cluster = clusters[-1]
-
-        cluster_name = detector.cluster_names.get(cluster, f"Cluster {cluster}")
-
-        # Result
-        print(f"\n🎯 Model Prediction: {cluster_name}")
+        result = model.score(order)
+        print(f"\n🎯 Model Prediction: {result['cluster_name']}")
         print(f"   Expected: {test['expected']}")
 
-        if cluster == -1:
+        if result["is_anomaly"]:
             print("\n🚨 BOB'S REACTION: 'Oh no... not again...'")
             print("   Status: ANOMALY DETECTED")
             print("   Recommendation: FLAG FOR REVIEW")
@@ -98,20 +82,8 @@ def test_custom_order():
 
         # Feature deviation analysis
         print("\n📊 Feature Deviation from Normal:")
-        normal_stats = df[df["cluster"] != -1][feature_cols].mean()
-
-        for feature, value in order.items():
-            normal_val = normal_stats[feature]
-            diff_pct = ((value - normal_val) / normal_val) * 100
-
-            if abs(diff_pct) > 100:
-                status = "🔴 EXTREME"
-            elif abs(diff_pct) > 50:
-                status = "🟡 HIGH"
-            else:
-                status = "🟢 NORMAL"
-
-            print(f"   {status} {feature}: {diff_pct:+.1f}% from baseline")
+        for d in explain_deviations(order, normal_stats):
+            print(f"   {d['severity']} {d['feature']}: {d['diff_pct']:+.1f}% from baseline")
 
 
 if __name__ == "__main__":
