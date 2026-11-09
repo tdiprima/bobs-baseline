@@ -1,4 +1,5 @@
 # 🍔 Bob's Baseline
+DBSCAN + NearestNeighbors outliers
 
 Unsupervised anomaly detection engine that flags unusual behavioral patterns — built on a fake Bob's Burgers dataset, designed to map directly to production problems like API abuse, cost spikes, and resource exhaustion.
 
